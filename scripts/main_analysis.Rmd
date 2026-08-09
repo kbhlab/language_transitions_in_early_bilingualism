@@ -18,6 +18,7 @@ library(tidylog)
 library(emmeans)
 library(extrafont)
 library(ggtext)
+library(rempsyc)
 
 options(scipen = 999)
 ```
@@ -158,9 +159,8 @@ coded_transitions %>%
             sd_transitions = sd(n_transitions),
             min_transitions = min(n_transitions),
             max_transitions = max(n_transitions)) %>% 
-  kbl(caption = "Frequency of Transitions",
-      col.names = c("Mean","SD","Min","Max"), digits = 3) %>%
-  kable_classic(full_width = F, html_font = "Cambria", font_size = 12)
+  rename(Mean = mean_transitions, SD = sd_transitions, Min = min_transitions, Max = max_transitions)
+
 
 #-------------------------------------------- By transition type/interpersonal change
 
@@ -173,9 +173,10 @@ coded_transitions %>%
   mutate(percentage = scales::percent(perc_decimal)) %>%
   ungroup() %>%
   select(-perc_decimal) %>% 
-  kbl(caption = "Frequency of Transitions by Type",
-      col.names = c("Transition Type","Frequency","Percentage")) %>%
-  kable_classic(full_width = F, html_font = "Cambria", font_size = 12) 
+  rename(`Interpersonal Change` = int_change, 
+         Frequency = number_transitions, 
+         Percentage = percentage) 
+
 
 #-------------------------------------------- By transition reason
 
@@ -188,8 +189,10 @@ coded_transitions %>%
          percent = round(percent, digits = 4),
          transition_reason = ifelse(transition_reason != "COVID", str_to_sentence(transition_reason), transition_reason)) %>% 
   select(-percent) %>% 
-  kbl(col.names = c("Reason","Frequency","Percentage")) %>%
-  kable_classic(full_width = F, html_font = "Cambria", font_size = 12)
+  rename(`Transition Reason` = transition_reason, 
+         Frequency = n, 
+         Percentage = percentage)
+
 
 #-------------------------------------------- By transition reason by age
 
@@ -304,10 +307,10 @@ coded_transitions %>%
   group_by(participant) %>%
   summarize(change_in_dominance = sum(change_dominance)) %>%
   ungroup() %>% 
-  summarize(mean = mean(change_in_dominance),
-            sd = sd(change_in_dominance),
-            min = min(change_in_dominance),
-            max = max(change_in_dominance))
+  summarize(Mean = mean(change_in_dominance),
+            SD = sd(change_in_dominance),
+            Min = min(change_in_dominance),
+            Max = max(change_in_dominance)) 
 
 #-------------------------------------------- By Transition type/interpersonal change
 
@@ -329,7 +332,7 @@ coded_transitions %>%
   pivot_wider(names_from = "change_dominance", values_from = "n") %>%
   filter(int_change != "initial_phase") %>%
   mutate(percent_yes = yes/(yes +  no)*100) %>%
-  arrange(desc(percent_yes))
+  arrange(desc(percent_yes)) 
 
 #-------------------------------------------- By Transition reason
 
@@ -350,7 +353,7 @@ coded_transitions %>%
   pivot_wider(names_from = "change_dominance", values_from = "n") %>%
   mutate(yes = ifelse(is.na(yes), 0, yes),
          percent_yes = yes/(yes +  no)*100) %>%
-  arrange(desc(percent_yes))
+  arrange(desc(percent_yes)) 
 
 #------------------Primary reason only
 coded_transitions %>%
@@ -366,8 +369,13 @@ coded_transitions %>%
   mutate(change_dominance = ifelse(change_dominance == 1, "yes", "no")) %>%
   pivot_wider(names_from = "change_dominance", values_from = "n") %>%
   mutate(yes = ifelse(is.na(yes), 0, yes),
-         percent_yes = yes/(yes +  no)*100) %>%
-  arrange(desc(percent_yes))
+         percent_yes = yes/(yes +  no)*100,
+         transition_reason1 = ifelse(transition_reason1 != "COVID", str_to_sentence(transition_reason1), transition_reason1)) %>%
+  arrange(desc(percent_yes)) %>% 
+  rename(`Primary transition reason` = transition_reason1, 
+         `N without dominance switch` = no, 
+         `N with dominance switch` = yes,
+         `Percent with dominance switch` = percent_yes) 
 
 ```
 
@@ -634,7 +642,7 @@ model_dom_5lvls_add_vs_interact %>%
       digits = 3, booktabs = T) %>%
   kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
 
-#----------------------- Pairwise comparisons to see which nterpersonal changes are different from one another
+#----------------------- Pairwise comparisons to see which interpersonal changes are different from one another
 
 summary(model_dom_5lvls_basic)
 model_dom_5lvls_basic_emms <- emmeans(model_dom_5lvls_basic, "int_change")
@@ -1553,5 +1561,306 @@ pairs_model_dom_reasons %>%
         plot.title.position = "plot")
 
 ggsave("figures/emm_pairwise_domchange_reasons.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
+
+##Tables
+```{r descriptives}
+
+#-------------------------------------------- Overall frequency and percentage
+
+coded_transitions %>%
+  group_by(participant) %>%
+  summarize(n_transitions = n() - 1) %>% #subtract 1 to remove the initial phase
+  ungroup() %>%
+  summarize(mean_transitions = mean(n_transitions),
+            sd_transitions = sd(n_transitions),
+            min_transitions = min(n_transitions),
+            max_transitions = max(n_transitions)) %>% 
+  rename(Mean = mean_transitions, SD = sd_transitions, Min = min_transitions, Max = max_transitions) %>%
+  nice_table(title = c("Table 1", "Frequency of transitions"), width = 1) 
+
+
+#-------------------------------------------- By transition type/interpersonal change
+
+coded_transitions %>%
+  filter(int_change != "initial_phase") %>% # filter initial phase since we are not interested in this "type" - no transitions can occur at phase 1
+  group_by(int_change) %>%
+  summarize(number_transitions = n()) %>%
+  mutate(perc_decimal = number_transitions / sum(number_transitions)) %>% 
+  arrange(-perc_decimal) %>%
+  mutate(percentage = scales::percent(perc_decimal)) %>%
+  ungroup() %>%
+  select(-perc_decimal) %>% 
+  rename(`Interpersonal Change` = int_change, 
+         Frequency = number_transitions, 
+         Percentage = percentage) %>%
+  nice_table(title = c("Table 2", "Frequency of transitions by interpersonal change"), width = 1) 
+
+
+#-------------------------------------------- By transition reason
+
+coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  filter(transition_reason != "initial_phase" & transition_reason != "activity") %>% 
+  janitor::tabyl(transition_reason) %>%
+  arrange(-percent) %>%
+  mutate(percentage = scales::percent(percent),
+         percent = round(percent, digits = 4),
+         transition_reason = ifelse(transition_reason != "COVID", str_to_sentence(transition_reason), transition_reason)) %>% 
+  select(-percent) %>% 
+  rename(`Transition Reason` = transition_reason, 
+         Frequency = n, 
+         Percentage = percentage) %>%
+  nice_table(title = c("Table 3", "Frequency of transitions by transition reason"), width = 1) 
+
+#-------------------------------------------- Mean and SD changes in dominance
+
+coded_transitions %>%
+  group_by(participant) %>%
+  filter(n() > 1) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  select(participant, phase, int_change, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(participant) %>%
+  summarize(change_in_dominance = sum(change_dominance)) %>%
+  ungroup() %>% 
+  summarize(Mean = mean(change_in_dominance),
+            SD = sd(change_in_dominance),
+            Min = min(change_in_dominance),
+            Max = max(change_in_dominance)) %>% 
+  nice_table(title = c("Table 4", "Frequency of language dominance switches"), width = 1) 
+
+
+#-------------------------------------------- Primary reason only
+coded_transitions %>%
+  group_by(participant) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  filter(int_change != "initial_phase" & transition_reason1 != "activity") %>% 
+  select(participant, phase, transition_reason1, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(transition_reason1) %>%
+  count(change_dominance) %>%
+  mutate(change_dominance = ifelse(change_dominance == 1, "yes", "no")) %>%
+  pivot_wider(names_from = "change_dominance", values_from = "n") %>%
+  mutate(yes = ifelse(is.na(yes), 0, yes),
+         percent_yes = yes/(yes +  no)*100,
+         transition_reason1 = ifelse(transition_reason1 != "COVID", str_to_sentence(transition_reason1), transition_reason1)) %>%
+  arrange(desc(percent_yes)) %>% 
+  rename(`Primary transition reason` = transition_reason1, 
+         `N without dominance switch` = no, 
+         `N with dominance switch` = yes,
+         `Percent with dominance switch` = percent_yes) %>%
+  nice_table(title = c("Table 5", "Frequency of language dominance switches by primary transition reason"), width = 1) 
+
+
+#-------------------------------------------- Interpersonal Change by transition reason
+coded_transitions %>%
+  filter(int_change != "initial_phase") %>% # filter initial phase since we are not interested in this "type" - no transitions can occur at phase 1
+  group_by(int_change, transition_reason1) %>%
+  summarize(number_transitions = n()) %>%
+  group_by(int_change) %>%
+  mutate(perc_decimal = number_transitions / sum(number_transitions)) %>% 
+  arrange(int_change, -perc_decimal) %>%
+  mutate(percentage = scales::percent(perc_decimal),
+         transition_reason1 = ifelse(transition_reason1 == "COVID", "COVID", str_to_sentence(transition_reason1))) %>%
+  group_by(int_change) %>%
+  mutate(tot = sum(number_transitions)) %>%
+  ungroup() %>%
+  arrange(desc(tot), desc(number_transitions)) %>%
+  rename(`Primary transition reason` = transition_reason1, `n` = number_transitions, Percent = percentage) %>%
+  select(-int_change, -perc_decimal, - tot) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+  style_table() %>%
+  tinytable::group_tt(i = list(
+    "SpeakerTime" = 1,
+    "Time" = 6,
+    "Strategy" = 10,
+    "SpeakerStrategyTime" = 14,
+    "Speaker" = 17,
+    "StrategyTime" = 20,
+    "SpeakerStrategy" = 23
+  )) %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+
+#-------------------------------------------- Transition reason by Interpersonal Change 
+coded_transitions %>%
+  filter(int_change != "initial_phase") %>% # filter initial phase since we are not interested in this "type" - no transitions can occur at phase 1
+  group_by(int_change, transition_reason1) %>%
+  summarize(number_transitions = n()) %>%
+  group_by(transition_reason1) %>%
+  mutate(perc_decimal = number_transitions / sum(number_transitions)) %>% 
+  arrange(int_change, -perc_decimal) %>%
+  mutate(percentage = scales::percent(perc_decimal),
+         transition_reason1 = ifelse(transition_reason1 == "COVID", "COVID", str_to_sentence(transition_reason1))) %>%
+  group_by(transition_reason1) %>%
+  mutate(tot = sum(number_transitions)) %>%
+  ungroup() %>%
+  arrange(desc(tot), desc(number_transitions)) %>%
+  select(int_change, number_transitions, percentage) %>%
+  rename(`Interpersonal change` = int_change, `Frequency` = number_transitions, Percent = percentage) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+  style_table() %>%
+  tinytable::group_tt(i = list(
+    "Daycare" = 1,
+    "Caregiving arrangement" = 7,
+    "COVID" = 13,
+    "Language approach" = 17,
+    "Trip" = 18,
+    "Relocation" = 22
+  )) %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+```
+
+```{r dominance change models}
+
+#----------------------------------Dominance switch by interpersonal change model
+sjPlot::tab_model(model_dom_5lvls_basic)
+
+
+
+#-----------------Pairwise comparisons for Dominance switch by interpersonal change model
+
+style_table <- function(data) {
+  data %>%
+  tinytable::style_tt(
+        i = 0,             # Header row
+        line = "t", # Top and bottom lines for the header
+        line_color = "black"
+    ) %>%
+    tinytable::style_tt(
+        i = nrow(data), # Bottom row of the data
+        line = "b",    # Bottom line for the table body
+        line_color = "black"
+    ) 
+}
+
+as.data.frame(broom::tidy(pairs(model_dom_5lvls_basic_emms))) %>%
+  select(Contrast = contrast, Estimate = estimate, `Std. Error` = std.error, df, Statistic = statistic, `Adjusted p-value` = adj.p.value) %>%
+  mutate(df = "\u221E") %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+    tinytable::style_tt(
+        i = which(`Adjusted p-value` < .05), 
+        j = "Adjusted p-value", 
+        bold = TRUE
+    ) %>%
+  style_table() %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+#----------------------------------Dominance switch by transition reason model
+sjPlot::tab_model(model_dom_reasons_basic)
+
+
+
+#-----------------Pairwise comparisons for Dominance switch by interpersonal change model
+
+as.data.frame(broom::tidy(pairs(model_dom_reasons_basic_emms))) %>%
+  select(Contrast = contrast, Estimate = estimate, `Std. Error` = std.error, df, Statistic = statistic, `Adjusted p-value` = adj.p.value) %>%
+  mutate(df = "\u221E") %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+    tinytable::style_tt(
+        i = which(`Adjusted p-value` < .05), 
+        j = "Adjusted p-value", 
+        bold = TRUE
+    ) %>%
+  style_table() %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+```
+
+```{r abs change models}
+
+#-------------------------------Absolute exposure change by transition reason model
+sjPlot::tab_model(model_abs_change_reasons_age_interact)
+
+
+#-----------------Pairwise comparisons at three time points for absolute exposure change by transition reason model
+
+as.data.frame(broom::tidy(pairs(model_abs_change_reasons_interact_emms_points))) %>%
+  select(Contrast = contrast, Estimate = estimate, `Std. Error` = std.error, df, Statistic = statistic, `Adj. p-value` = adj.p.value) %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+    tinytable::style_tt(
+        i = which(`Adj. p-value` < .05), 
+        j = "Adj. p-value", 
+        bold = TRUE
+    ) %>%
+  style_table() %>%
+  tinytable::group_tt(i = list(
+    "5 months" = 1,
+    "15 months" = 11,
+    "25 months" = 21
+  )) %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+
+#-------------------------------Absolute exposure change by interpersonal change model
+sjPlot::tab_model(model_abs_change_int_age_interact)
+
+
+#-----------------Pairwise comparisons at three time points for absolute exposure change by interpersonal change model
+
+as.data.frame(broom::tidy(pairs(model_abs_change_int_interact_emms_points))) %>%
+  select(Contrast = contrast, Estimate = estimate, `Std. Error` = std.error, df, Statistic = statistic, `Adj. p-value` = adj.p.value) %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+    tinytable::style_tt(
+        i = which(`Adj. p-value` < .05), 
+        j = "Adj. p-value", 
+        bold = TRUE
+    ) %>%
+  style_table() %>%
+  tinytable::group_tt(i = list(
+    "5 months" = 1,
+    "15 months" = 11,
+    "25 months" = 21
+  )) %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+#-----------------Pairwise comparisons of slopes for absolute exposure change by primary transition reason model
+
+pairs_model_abs_change_reasons %>% 
+  arrange(estimate) %>%
+  select(Contrast = contrast, Estimate = estimate, `Std. Error` = SE, df, `T ratio` = t.ratio, `p-value` = p.value) %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+    tinytable::style_tt(
+        i = which(`p-value` < .05), 
+        j = "p-value", 
+        bold = TRUE
+    ) %>%
+  style_table() %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
+
+#-----------------Pairwise comparisons of slopes for absolute exposure change by interpersonal change model
+
+pairs_model_abs_change_int %>% 
+  arrange(estimate) %>%
+  select(Contrast = contrast, Estimate = estimate, `Std. Error` = SE, df, `T ratio` = t.ratio, `p-value` = p.value) %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  tinytable::tt(# Left-align first column, right-align numeric columns
+                align = "lrrrr" ) %>%
+    tinytable::style_tt(
+        i = which(`p-value` < .05), 
+        j = "p-value", 
+        bold = TRUE
+    ) %>%
+  style_table() %>%
+  tinytable::save_tt("my_output_table.docx", overwrite = TRUE)
 
 ```
