@@ -1,0 +1,62 @@
+repeat_num,form_filler,form_filler_other,primary_caregiver,primary_caregiver_other,mother_education,secondary_caregiver,annual_income,child_hispanic_latino,child_ethnicity,participant_value,responding_caregivers_leq
+1,Mother,NA,Mother,NA,16,Father,100000-125000,FALSE,['W'],1,mother
+1,Mother,NA,Mother,NA,11,Father,50000-75000,FALSE,['W'],18,mother
+1,Mother,NA,Mother,NA,11,Father,50000-75000,FALSE,['W'],19,mother
+1,Father,NA,Father,NA,17,NA,175000-200000,FALSE,"['A', 'W']",8,mother
+1,Mother,NA,Mother,NA,18,Father,150000-175000,FALSE,['W'],25,mother
+1,Mother,NA,Mother,NA,18,Father,75000-100000,FALSE,"['B', 'W']",5,mother
+1,Mother,NA,Mother,NA,19,Father,125000-150000,FALSE,['W'],6,mother
+1,Mother,NA,Mother,NA,18,Father,100000-125000,FALSE,['W'],7,mother
+1,Mother,NA,Mother,NA,16,Father,100000-125000,FALSE,['W'],3,mother
+1,Mother,NA,Mother,NA,21,Father,>200000,FALSE,['W'],4,father
+1,Mother,NA,Mother,NA,18,Father,125000-150000,FALSE,['W'],9,mother
+1,Mother,NA,Mother,NA,16,Father,Prefer not to disclose,TRUE,['W'],2,mother
+1,Mother,NA,Mother,NA,18,Father,75000-100000,FALSE,"['B', 'W']",36,mother
+1,Mother,NA,Mother,NA,20,Father,175000-200000,FALSE,['W'],51,mother
+1,Mother,NA,Mother,NA,17,NA,>200000,FALSE,['W'],10,mother
+1,Mother,NA,Mother,NA,18,Father,100000-125000,FALSE,NA,13,mother
+1,Father,NA,Father,NA,16,Mother,75000-100000,TRUE,['W'],11,father
+1,Father,NA,Mother,NA,12,Father,75000-100000,FALSE,"['B', 'W']",12,mother
+1,Mother,NA,Mother,NA,16,Mother,50000-75000,FALSE,['W'],14,mother
+1,Mother,NA,Mother,NA,23,Father,125000-150000,FALSE,['W'],15,mother
+1,Mother,NA,Mother,NA,15,Father,100000-125000,FALSE,['W'],20,mother
+1,Father,NA,Mother,NA,18,Father,75000-100000,FALSE,['W'],21,mother
+1,Mother,NA,Mother,NA,17,Father,50000-75000,FALSE,['W'],17,mother
+1,Mother,NA,Mother,NA,16,Father,50000-75000,FALSE,['W'],16,mother
+1,Mother,NA,Mother,NA,18,Father,150000-175000,FALSE,['W'],22,mother
+1,Mother,NA,Mother,NA,18,Father,25000-50000,FALSE,['W'],23,mother
+1,Mother,NA,Mother,NA,16,Father,75000-100000,FALSE,['W'],24,mother
+1,Mother,NA,Mother,NA,13,NA,25000-50000,FALSE,['W'],28,mother
+1,Mother,NA,Mother,NA,19,Father,>200000,FALSE,['W'],26,mother
+1,Mother,NA,Mother,NA,16,Father,175000-200000,FALSE,"['B', 'W']",29,mother
+1,Mother,NA,Mother,NA,15,Father,100000-125000,FALSE,['W'],31,mother
+1,Mother,NA,Mother,NA,18,NA,100000-125000,FALSE,['W'],33,mother
+1,Mother,NA,Mother,NA,17,Father,100000-125000,FALSE,['W'],27,mother
+1,Mother,NA,Mother,NA,16,NA,>200000,FALSE,['W'],32,mother
+1,Mother,NA,Mother,NA,11,NA,Prefer not to disclose,FALSE,['W'],30,mother
+1,Mother,NA,Mother,NA,16,Father,100000-125000,FALSE,['O'],34,mother
+1,Mother,NA,Mother,NA,23,Mother,150000-175000,FALSE,['W'],35,mother
+1,Mother,NA,Mother,NA,13,Father,125000-150000,FALSE,"['A', 'B']",57,mother
+1,Mother,NA,Mother,NA,18,Father,125000-150000,TRUE,"['W', 'O']",37,mother
+1,Mother,NA,Mother,NA,13,Father,75000-100000,FALSE,"['B', 'W']",38,mother
+1,Mother,NA,Mother,NA,21,Father,175000-200000,FALSE,['W'],39,mother
+1,Mother,NA,Mother,NA,18,Father,75000-100000,FALSE,['W'],47,mother
+1,Mother,NA,Mother,NA,16,Father,Prefer not to disclose,FALSE,"['A', 'W']",40,mother
+1,Mother,NA,Mother,NA,15,Father,150000-175000,FALSE,['W'],41,mother
+1,Father,NA,Mother,NA,17,Father,75000-100000,FALSE,['W'],42,mother
+1,Mother,NA,Mother,NA,16,Father,100000-125000,FALSE,['W'],43,mother
+1,Mother,NA,Mother,NA,16,Father,Prefer not to disclose,FALSE,['W'],46,mother
+1,Mother,NA,Mother,NA,19,NA,75000-100000,FALSE,['W'],44,mother
+1,Mother,NA,Mother,NA,23,Father,150000-175000,FALSE,"['A', 'W']",45,mother
+1,Mother,NA,Mother,NA,12,Father,75000-100000,FALSE,"['N', 'W']",52,mother and father
+1,Mother,NA,Mother,NA,16,Father,Prefer not to disclose,FALSE,['W'],55,mother
+1,Mother,NA,Mother,NA,18,Father,>200000,FALSE,['W'],48,mother
+1,Mother,NA,Mother,NA,16,NA,100000-125000,FALSE,['W'],56,mother
+1,Mother,NA,Mother,NA,18,Father,175000-200000,FALSE,['W'],49,mother
+1,Mother,NA,Mother,NA,18,Father,175000-200000,FALSE,['W'],50,mother
+1,Father,NA,Mother,NA,13,Father,25000-50000,FALSE,['W'],54,mother
+1,Mother,NA,Mother,NA,19,Father,75000-100000,FALSE,['W'],53,mother
+1,Mother,NA,Mother,NA,16,Father,100000-125000,FALSE,['W'],58,mother
+1,Mother,NA,Mother,NA,21,Father,175000-200000,FALSE,['W'],59,mother
+1,Mother,NA,Mother,NA,16,Father,>200000,FALSE,['W'],61,mother
+1,Mother,NA,Mother,NA,16,Father,100000-125000,FALSE,['W'],60,mother

@@ -1,0 +1,1557 @@
+---
+title: "Language Transitions in Early Bilingualism"
+output: html_document
+date: "2026-08-08"
+author: "Hilary Killam, Tanya Glowacki, Laia Fibla"
+editor_options: 
+  chunk_output_type: console
+---
+##Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lme4)
+library(performance)
+library(patchwork)
+library(kableExtra)
+library(tidylog)
+library(emmeans)
+library(extrafont)
+library(ggtext)
+
+options(scipen = 999)
+```
+
+```{r load data}
+
+# Load (anonymized) dataset
+coded_transitions <- read_csv("data/anonymized_coded_transitions.csv") %>%
+  #we are omitting transition reason "activity" from analyses because only one child has this reason and comparisons can't be made. Still keep the rows for the interpersonal change value.
+  mutate(transition_reason1 = ifelse(transition_reason1 == "activity", NA, transition_reason1)) %>%
+  #rename the transition_category column to our new descriptor, interpersonal change, to make things clearer
+  rename(int_change = transition_category) %>%
+  filter(!participant %in% c(19, 50)) #These participants are twins (not with each other, but from two different sets in the data). Since only one LEQ was done per twin pair, we are removing one twin per pair from the dataset so as not to have exact duplicate rows.
+
+# age at enrollment data
+ages <- read_csv(here::here("data/starting_ages.csv")) %>%
+  mutate(age_months = parse_number(starting_age),
+         participant = ifelse(str_length(participant) < 2, paste0("0", participant), paste0(participant))) %>%
+  filter(participant %in% coded_transitions$participant)
+
+#demographic data
+demogs <- read_csv(here::here("data/demographics.csv")) %>%
+  mutate(participant = case_when(str_length(participant_value) == 1 ~ paste0("0", participant_value),
+                                 TRUE ~ as.character(participant_value))) %>%
+  filter(participant %in% coded_transitions$participant)
+
+```
+
+```{r clean data}
+
+#calculate & label exposure dominance at every phase
+
+coded_transitions <- coded_transitions %>%
+  # if there was a third language less than 10%, the denominator was not 100, but instead the addition between English and French exposure.
+  mutate(dominance_lang = case_when(
+    #if L3, check if Eng to Fre ratio is greater than 0.6. If so, Eng dominant
+            current_exp_L3 > 0 & current_exp_Eng/(current_exp_Eng + current_exp_Fre) > 0.6 ~ "English_dominant",
+  #if L3, check if Fre to Eng ratio is greater than 0.6. If so, Fre dominant
+            current_exp_L3 > 0 & current_exp_Fre/(current_exp_Eng + current_exp_Fre) > 0.6 ~ "French_dominant",
+  #if L3 + L4 is greater than 0.6, then 3rd lang dominant
+            rowSums(across(c(current_exp_L3, current_exp_L4)), na.rm = TRUE) > 0.6 ~ "Third_language",
+  #if L3, check if Eng to Fre ratio is between 0.4 and 0.6. If so, Balanced
+            current_exp_L3 > 0 & current_exp_Eng/(current_exp_Eng + current_exp_Fre) >= 0.4 & current_exp_Eng/(current_exp_Eng + current_exp_Fre) <= 0.6 ~ "Balanced",
+  #if Eng greater than 0.6, Eng dominant
+            current_exp_Eng > 0.6 ~ "English_dominant", 
+  #if Fre greater than 0.6, Fre dominant
+            current_exp_Fre > 0.6  ~ "French_dominant", 
+  #if Eng between 0.4 and 0.6, Balanced
+            current_exp_Eng >= 0.4 & current_exp_Eng <= 0.6 ~ "Balanced"))
+
+#Check if any phases have 3rd language as the dominant one, if so, we'll have to exclude those or recalculate based on EN-FR only:
+
+coded_transitions %>% 
+  count(dominance_lang)
+
+#all good, no phases where 3rd lang is over .6
+
+```
+
+##Descriptives
+
+```{r demographic stats - age/sex/ses/sample n/race/caregiver}
+
+#-------------------------------------------- Number of participants
+
+#--- Total
+coded_transitions %>%
+  distinct(participant) %>%
+  nrow()
+
+#--- With at least one transition
+coded_transitions %>%
+  group_by(participant) %>%
+  filter(phase == max(phase)) %>%
+  filter(phase > 1) %>%
+  distinct(participant) %>%
+  nrow()
+
+#-------------------------------------------- Ethnicity
+demogs %>% 
+  mutate(child_ethnicity = str_remove_all(child_ethnicity, "\\[|\\]"),
+         child_ethnicity = str_extract(child_ethnicity, "[A-Za-z]")) %>%
+  separate_rows(child_ethnicity, sep = ",") %>% 
+  janitor::tabyl(child_ethnicity) %>%
+  arrange(desc(percent))
+
+# W = White, B = Black, A = Asian, N = Indigenous, O = Other
+
+#--------------------------------------------  Mother education
+demogs %>%
+  janitor::tabyl(mother_education) %>%
+  arrange(desc(n))
+
+demogs %>%
+  summarize(mean_ed = mean(mother_education),
+            min_ed = min(mother_education),
+            max_ed = max(mother_education),
+            sd_ed = sd(mother_education))
+
+#--------------------------------------------  Annual income
+demogs %>%
+  janitor::tabyl(annual_income) %>%
+  arrange(desc(n))
+
+#--------------------------------------------  Age at enrollment
+ages %>%
+  summarize(min_age = min(age_months),
+            mean_age = mean(age_months),
+            max_age = max(age_months),
+            sd_age = sd(age_months))
+
+#-------------------------------------------- Sex
+ages %>%
+  janitor::tabyl(sex)
+
+#-------------------------------------------- Responding caregiver
+ages %>%
+  janitor::tabyl(responding_caregivers_leq)
+
+#-------------------------------------------- Number who heard 3rd language
+coded_transitions %>% 
+  distinct(participant, total_hrs_L3) %>%
+  mutate(has_3rd_lang = ifelse(is.na(total_hrs_L3) | total_hrs_L3 == 0, 0, 1)) %>%
+  count(has_3rd_lang)
+
+```
+
+
+```{r descriptive stats - reasons/types/age}
+
+#-------------------------------------------- Overall frequency and percentage
+
+coded_transitions %>%
+  group_by(participant) %>%
+  summarize(n_transitions = n() - 1) %>% #subtract 1 to remove the initial phase
+  ungroup() %>%
+  summarize(mean_transitions = mean(n_transitions),
+            sd_transitions = sd(n_transitions),
+            min_transitions = min(n_transitions),
+            max_transitions = max(n_transitions)) %>% 
+  kbl(caption = "Frequency of Transitions",
+      col.names = c("Mean","SD","Min","Max"), digits = 3) %>%
+  kable_classic(full_width = F, html_font = "Cambria", font_size = 12)
+
+#-------------------------------------------- By transition type/interpersonal change
+
+coded_transitions %>%
+  filter(int_change != "initial_phase") %>% # filter initial phase since we are not interested in this "type" - no transitions can occur at phase 1
+  group_by(int_change) %>%
+  summarize(number_transitions = n()) %>%
+  mutate(perc_decimal = number_transitions / sum(number_transitions)) %>% 
+  arrange(-perc_decimal) %>%
+  mutate(percentage = scales::percent(perc_decimal)) %>%
+  ungroup() %>%
+  select(-perc_decimal) %>% 
+  kbl(caption = "Frequency of Transitions by Type",
+      col.names = c("Transition Type","Frequency","Percentage")) %>%
+  kable_classic(full_width = F, html_font = "Cambria", font_size = 12) 
+
+#-------------------------------------------- By transition reason
+
+coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  filter(transition_reason != "initial_phase" & transition_reason != "activity") %>% 
+  janitor::tabyl(transition_reason) %>%
+  arrange(-percent) %>%
+  mutate(percentage = scales::percent(percent),
+         percent = round(percent, digits = 4),
+         transition_reason = ifelse(transition_reason != "COVID", str_to_sentence(transition_reason), transition_reason)) %>% 
+  select(-percent) %>% 
+  kbl(col.names = c("Reason","Frequency","Percentage")) %>%
+  kable_classic(full_width = F, html_font = "Cambria", font_size = 12)
+
+#-------------------------------------------- By transition reason by age
+
+coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  filter(transition_reason != "initial_phase") %>% 
+  group_by(start_age) %>%
+  count(transition_reason) %>%
+  group_by(start_age) %>%
+  mutate(pct = n/sum(n))
+
+#-------------------------------------------- By transition type/interpersonal change and reason
+
+coded_transitions %>%
+  filter(int_change != "initial_phase") %>% # filter initial phase since we are not interested in this "type" - no transitions can occur at phase 1
+  group_by(int_change, transition_reason1) %>%
+  summarize(number_transitions = n()) %>%
+  group_by(int_change) %>%
+  mutate(perc_decimal = number_transitions / sum(number_transitions)) %>% 
+  arrange(int_change, -perc_decimal) %>%
+  mutate(percentage = scales::percent(perc_decimal)) 
+
+#-------------------------------------------- Percent of sample attending daycare & average age starting daycare
+
+#percent by age
+coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  distinct(participant, transition_reason, start_age) %>%
+  filter(transition_reason == "daycare") %>% 
+  group_by(participant) %>%
+  filter(start_age == min(start_age)) %>%
+  group_by(start_age) %>%
+  summarize(number_daycare_by_age = n()) %>%
+  ungroup() %>%
+  mutate(overall_percent_kids = number_daycare_by_age/nrow(ages),
+         cumu_percent_kids = cumsum(number_daycare_by_age)/nrow(ages))
+
+#average age starting
+coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  distinct(participant, transition_reason, start_age) %>%
+  filter(transition_reason == "daycare") %>% 
+  group_by(participant) %>%
+  filter(start_age == min(start_age)) %>%
+  ungroup %>%
+  summarize(mean_age = mean(start_age))
+
+#-------------------------------------------- Percent of sample with more than one transition reason
+coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  filter(start_age > 0 & !is.na(transition_reason)) %>%
+  distinct(participant, transition_reason, start_age) %>% 
+  count(participant, start_age) %>%
+  mutate(multi = ifelse(n == 1, 0, 1)) %>%
+  count(multi) %>%
+  mutate(pct = n/sum(n))
+
+#-------------------------------------------- Percent of sample with more than one interpersonal change
+coded_transitions %>%
+  filter(start_age > 0) %>%
+  mutate(multi = ifelse(str_count(int_change, "[:upper:]") > 1, 1, 0)) %>%
+  count(multi) %>%
+  mutate(pct = n/sum(n))
+
+```
+
+
+```{r changes to language dominance}
+
+#-------------------------------------------- Number of kids who heard 3rd language
+coded_transitions %>% 
+  filter(!is.na(language_name_L3)) %>% 
+  distinct(participant) %>% 
+  nrow()
+
+#-------------------------------------------- Dominance by language
+
+coded_transitions %>% 
+  group_by(participant) %>%
+  filter(int_change == "initial_phase" & n() > 1) %>% 
+  ungroup() %>%
+  count(dominance_lang)
+  
+
+#-------------------------------------------- Percent who switched most-heard language
+
+coded_transitions %>%
+  group_by(participant) %>%
+  filter(n() > 1) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  select(participant, phase, int_change, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(participant) %>%
+  summarize(change_in_dominance = sum(change_dominance)) %>%
+  ungroup() %>%
+  mutate(change_in_dominance_10 = ifelse(change_in_dominance > 0, 1, change_in_dominance)) %>% 
+  summarize(mean_change_in_dominance = mean(change_in_dominance_10),
+            n_change_in_dominance = sum(change_in_dominance_10 == 1))
+
+#-------------------------------------------- Mean and SD changes in dominance
+
+coded_transitions %>%
+  group_by(participant) %>%
+  filter(n() > 1) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  select(participant, phase, int_change, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(participant) %>%
+  summarize(change_in_dominance = sum(change_dominance)) %>%
+  ungroup() %>% 
+  summarize(mean = mean(change_in_dominance),
+            sd = sd(change_in_dominance),
+            min = min(change_in_dominance),
+            max = max(change_in_dominance))
+
+#-------------------------------------------- By Transition type/interpersonal change
+
+coded_transitions %>%
+  group_by(participant) %>%
+  filter(n() > 1) %>%
+  #group less common categories together into "other"
+  mutate(int_change = case_when(int_change == "Speaker"|
+                                      int_change == "StrategyTime"|
+                                      int_change == "SpeakerStrategy" ~ "Other", TRUE ~ int_change)) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  select(participant, phase, int_change, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(int_change) %>%
+  count(change_dominance) %>%
+  mutate(change_dominance = ifelse(change_dominance == 1, "yes", "no")) %>%
+  pivot_wider(names_from = "change_dominance", values_from = "n") %>%
+  filter(int_change != "initial_phase") %>%
+  mutate(percent_yes = yes/(yes +  no)*100) %>%
+  arrange(desc(percent_yes))
+
+#-------------------------------------------- By Transition reason
+
+#--------------All reasons
+coded_transitions %>%
+  group_by(participant) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  filter(int_change != "initial_phase") %>% 
+  filter(!is.na(transition_reason) & transition_reason != "activity") %>%
+  select(participant, phase, transition_reason, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(transition_reason) %>%
+  count(change_dominance) %>%
+  mutate(change_dominance = ifelse(change_dominance == 1, "yes", "no")) %>%
+  pivot_wider(names_from = "change_dominance", values_from = "n") %>%
+  mutate(yes = ifelse(is.na(yes), 0, yes),
+         percent_yes = yes/(yes +  no)*100) %>%
+  arrange(desc(percent_yes))
+
+#------------------Primary reason only
+coded_transitions %>%
+  group_by(participant) %>%
+          #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+         mutate(change_dominance = case_when(dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+                                      dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  ungroup() %>% 
+  filter(int_change != "initial_phase" & transition_reason1 != "activity") %>% 
+  select(participant, phase, transition_reason1, contains("curr"), dominance_lang, change_dominance) %>% 
+  group_by(transition_reason1) %>%
+  count(change_dominance) %>%
+  mutate(change_dominance = ifelse(change_dominance == 1, "yes", "no")) %>%
+  pivot_wider(names_from = "change_dominance", values_from = "n") %>%
+  mutate(yes = ifelse(is.na(yes), 0, yes),
+         percent_yes = yes/(yes +  no)*100) %>%
+  arrange(desc(percent_yes))
+
+```
+
+##Models
+
+```{r prep model data}
+
+#--------------------function that prepares a dataset by calculating all the variables we need
+
+transform_data_for_models <- function(dataset, remove_initial_phase = T) {
+  
+  dataset %>% 
+    group_by(participant) %>%
+    #calculate if there was a change in exposure dominance at every transition (from phase to phase)
+  mutate(change_dominance = case_when(
+    dominance_lang == lag(dominance_lang, default = first(dominance_lang)) ~ 0,
+    dominance_lang != lag(dominance_lang, default = first(dominance_lang)) ~ 1)) %>%
+  
+    #Determine exposure dominance at time 1 and copy to every row
+  mutate(t1_dominance = case_when(int_change == "initial_phase" ~ dominance_lang)) %>%
+  fill(t1_dominance, .direction = "down") %>%
+  
+    #Calculate exposure of dominant language at phase 1 and copy to every row
+  mutate(t1_domlang_exp = case_when(
+    int_change == "initial_phase" & current_exp_Eng > current_exp_Fre ~ current_exp_Eng,
+    int_change == "initial_phase" & current_exp_Eng < current_exp_Fre ~ current_exp_Fre, 
+    int_change == "initial_phase" & current_exp_Eng == current_exp_Fre ~ current_exp_Eng)) %>% 
+  fill(t1_domlang_exp, .direction = "down") %>%
+  ungroup() %>%
+    
+  #Calculate current exposure of time 1 dominant language
+  mutate(t1_domlang_curr_exp = case_when(
+    t1_dominance == "English_dominant" ~ current_exp_Eng,
+    t1_dominance == "French_dominant" ~ current_exp_Fre,
+    t1_dominance == "Balanced" & current_exp_Eng > current_exp_Fre ~ current_exp_Eng,
+    t1_dominance == "Balanced" & current_exp_Fre >= current_exp_Eng ~ current_exp_Fre)) %>% 
+  
+  # Calculate the absolute change in exposure based on Time 1 dominance exp 
+  mutate(abs_change_t1_domlang = abs(t1_domlang_curr_exp - t1_domlang_exp)) %>%
+    
+  # create factor categorical version of the change dominance variable in case we want to use this
+  mutate(change_dominance_fct = factor(case_when(change_dominance == 1 ~ "yes_change",
+                                                 change_dominance == 0 ~ "no_change"))) %>% 
+  group_by(participant) %>% 
+    
+  # Calculate the absolute change in exposure phase by phase 
+  mutate(t1_domlang_curr_exp_lag = lag(t1_domlang_curr_exp, default = first(t1_domlang_curr_exp)),
+         abs_change_t1_domlang_phase = abs(t1_domlang_curr_exp - t1_domlang_curr_exp_lag)) %>%
+    
+  # Remove initial phase from dataset, as these do not count as transitions
+    { if (remove_initial_phase == T) filter(., int_change != "initial_phase") else . } %>%
+  # remove the one kid who has no transitions
+    { if (remove_initial_phase == F) filter(., max(row_number()) > 1) else . } %>%
+  ungroup() %>% 
+    
+  # convert exposure into percentages in case models work better with larger numbers
+  mutate(t1_domlang_exp_pct = t1_domlang_exp * 100,
+         t1_domlang_curr_exp_pct = t1_domlang_curr_exp * 100,
+         abs_change_t1_domlang_pct = abs_change_t1_domlang * 100,
+         abs_change_t1_domlang_phase_pct = abs_change_t1_domlang_phase * 100) %>% 
+
+  # Select relevant variables
+  select(participant, phase, phase_length, start_age, int_change, primary_transition_reason = transition_reason1,
+         dominance_lang, change_dominance, change_dominance_fct, t1_dominance, 
+         t1_domlang_exp, t1_domlang_exp_pct, 
+         t1_domlang_curr_exp, t1_domlang_curr_exp_pct, 
+         abs_change_t1_domlang, abs_change_t1_domlang_pct,
+         abs_change_t1_domlang_phase, abs_change_t1_domlang_phase_pct) %>%
+  # for case where first phase remains, add a value to nterpersonal change for first phase
+    mutate(int_change = case_when(phase == 1 ~ "birth_phase_no_transition",
+                                        TRUE ~ int_change),
+           #centre start age for the models with age
+           start_age_centred = as.numeric(scale(start_age, scale = F)))
+}
+
+#------------------------------ With interpersonal change grouped into 4 levels 
+
+model_data_4lvls <- coded_transitions %>%
+  mutate(int_change = case_when(
+    int_change == "Speaker"|
+      int_change == "StrategyTime"|
+      int_change == "SpeakerStrategy"|
+      int_change == "SpeakerStrategyTime" ~ "Other", 
+    TRUE ~ int_change)) %>%
+  transform_data_for_models() %>% 
+  mutate(int_change = factor(int_change, levels = c("Time", "SpeakerTime", "Strategy", "Other")))
+
+#------------------------------ With int_change grouped into 5 levels & transition_reason1 grouped into 5 levels
+
+model_data_5lvls <- coded_transitions %>%
+  mutate(int_change = case_when(
+    int_change == "Speaker"|
+      int_change == "StrategyTime"|
+      int_change == "SpeakerStrategy" ~ "Other", 
+    TRUE ~ int_change)) %>% 
+  mutate(transition_reason1 = case_when(
+           transition_reason1 %in% c("COVID", "daycare", "caregiving arrangement", "language approach") ~ transition_reason1,
+           TRUE ~ "other")
+         ) %>%
+  transform_data_for_models() %>%
+  mutate(int_change = factor(int_change, levels = c("Strategy", "Time", "SpeakerTime", "SpeakerStrategyTime", "Other")))
+
+```
+
+###Dominance change
+####By interpersonal change
+```{r dom change by interpersonal 4lvls}
+
+#-------------Change in exposure dominance group, our dependent variable for this model, was a categorical variable with two levels (yes/no) resulting in a binomial distribution. Therefore, we used binomial mixed effects models. The check_model function showed fewer outliers when using the probit link over the logit link, so that's what we used here.
+
+#-------------------------------------------- Model assumptions
+
+# Check what model fits the data best using the performanceR package, see "The Perfomance" workflow: https://easystats.github.io/performance/ (this already includes the qqnorm that we were using)
+
+
+#-------------- with transition type as 4-level predictor
+
+#----------------------- Model without age
+model_dom_4lvls_basic <- glmer(change_dominance ~ int_change + ( 1| participant), data = model_data_4lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_4lvls_basic)
+
+#----------------------- Model with age centred, additive
+model_dom_4lvls_age_add <- glmer(change_dominance ~ int_change + start_age_centred + ( 1| participant), data = model_data_4lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_4lvls_age_add)
+
+#----------------------- Model with age centred, interaction ********* FAILS TO CONVERGE
+model_dom_4lvls_age_interact <- glmer(change_dominance ~ int_change * start_age_centred + ( 1| participant), data = model_data_4lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_4lvls_age_interact)
+
+#----------------------- Compare all models with 4-level predictor
+model_dom_4lvls_comparison <- compare_performance(model_dom_4lvls_basic, model_dom_4lvls_age_add, model_dom_4lvls_age_interact, rank = TRUE) 
+
+# results table
+model_dom_4lvls_comparison %>% 
+  kbl(col.names = c("Model Name", "Model Type","R2 Conditional", "R2 Marginal", "ICC", "RMSE", "Sigma", "Log Loss", "Score Log", "Score Spherical", "AIC wt", "AICc wt", "BIC wt", "Performance Score"), digits = 3, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "HOLD_position", "scale_down"))
+
+#Basic model wins
+
+#Summary of basic model
+summary(model_dom_4lvls_basic)
+#Looks like the Strategy nterpersonal change is the only one that statistically affects dominance, negatively (so reduces the odds of a change in dominance), compared to the intercept level (Time)
+
+#----------------------- Test likelihood ratios to see if models are statistically significantly different from one another
+
+# No comparisons are statistically different (first row always has NAs as the other model(s) are compared to it)
+
+#Basic vs additive
+model_dom_4lvls_basic_vs_add <- test_likelihoodratio(model_dom_4lvls_basic, model_dom_4lvls_age_add) 
+
+model_dom_4lvls_basic_vs_add %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1)) %>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#Basic vs interaction
+model_dom_4lvls_basic_vs_interact <- test_likelihoodratio(model_dom_4lvls_basic, model_dom_4lvls_age_interact)
+
+model_dom_4lvls_basic_vs_interact %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1))%>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#Additive vs interaction
+model_dom_4lvls_add_vs_interact <- test_likelihoodratio(model_dom_4lvls_age_add, model_dom_4lvls_age_interact)
+
+model_dom_4lvls_add_vs_interact %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1))%>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#----------------------- Pairwise comparisons to see which interpersonal changes are different from one another
+
+summary(model_dom_4lvls_basic)
+model_dom_4lvls_basic_emms <- emmeans(model_dom_4lvls_basic, "int_change")
+summary(model_dom_4lvls_basic_emms)
+pairs(model_dom_4lvls_basic_emms)
+
+#Strategy is different from Time and SpeakerTime
+
+
+```
+
+```{r dom change by interpersonal 5lvls}
+
+#-------------- with transition type as 5-level predictor
+
+#----------------------- Model without age
+model_dom_5lvls_basic <- glmer(change_dominance ~ int_change + ( 1| participant), data = model_data_5lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_5lvls_basic)
+
+#----------------------- Model with age centred
+model_dom_5lvls_age_add <- glmer(change_dominance ~ int_change + start_age_centred + ( 1| participant), data = model_data_5lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_5lvls_age_add)
+
+#----------------------- Model with age centred, interaction ********* FAILS TO CONVERGE
+model_dom_5lvls_age_interact <- glmer(change_dominance ~ int_change * start_age_centred + ( 1| participant), data = model_data_5lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_5lvls_age_interact)
+
+#----------------------- Compare all models with 5-level predictor
+model_dom_5lvls_comparison <- compare_performance(model_dom_5lvls_basic, model_dom_5lvls_age_add, model_dom_5lvls_age_interact, rank = TRUE) 
+
+# results table
+model_dom_5lvls_comparison %>% 
+  kbl(col.names = c("Model Name", "Model Type","R2 Conditional", "R2 Marginal", "ICC", "RMSE", "Sigma", "Log Loss", "Score Log", "Score Spherical", "AIC wt", "AICc wt", "BIC wt", "Performance Score"), digits = 3, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "HOLD_position", "scale_down"))
+
+#Basic model wins
+
+#Summary of basic model
+summary(model_dom_5lvls_basic)
+
+#Looks like the Strategy interpersonal change is the only one that statistically affects dominance, negatively (so reduces the odds of a change in dominance), compared to the intercept (Time)
+
+#----------------------- Test likelihood ratios to see if models are statistically significantly different from one another
+
+# No comparisons are statistically different
+
+#Basic vs additive
+model_dom_5lvls_basic_vs_add <- test_likelihoodratio(model_dom_5lvls_basic, model_dom_5lvls_age_add) 
+
+model_dom_5lvls_basic_vs_add %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1)) %>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#Basic vs interaction
+model_dom_5lvls_basic_vs_interact <- test_likelihoodratio(model_dom_5lvls_basic, model_dom_5lvls_age_interact)
+
+model_dom_5lvls_basic_vs_interact %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1))%>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#Additive vs interaction
+model_dom_5lvls_add_vs_interact <- test_likelihoodratio(model_dom_5lvls_age_add, model_dom_5lvls_age_interact)
+
+model_dom_5lvls_add_vs_interact %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1))%>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#----------------------- Pairwise comparisons to see which nterpersonal changes are different from one another
+
+summary(model_dom_5lvls_basic)
+model_dom_5lvls_basic_emms <- emmeans(model_dom_5lvls_basic, "int_change")
+pairs(model_dom_5lvls_basic_emms) 
+
+#Strategy is different from Time, SpeakerTime, and SpeakerStrategyTime
+
+```
+
+```{r dom change by interp compare 4 vs 5}
+
+# Comparing best model of each section above
+test_performance(model_dom_4lvls_basic, model_dom_5lvls_basic) 
+compare_performance(model_dom_4lvls_basic, model_dom_5lvls_basic, metrics = "all")
+
+#Neither is significantly different than the other, maybe better to report on the one with more levels as more informative (less stuff squished within "other" category)
+
+```
+
+####By primary transition reason
+```{r dom change by primary reason}
+#----------------------------------------------REPORTED IN SUPPLEMENTAL MATERIALS
+
+#----------------------- Model without age
+model_dom_reasons_basic <- glmer(change_dominance ~ primary_transition_reason + ( 1| participant), data = model_data_5lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_reasons_basic)
+
+#----------------------- Model with age centred, additive 
+model_dom_reasons_age_add <- glmer(change_dominance ~ primary_transition_reason + start_age_centred + ( 1| participant), data = model_data_5lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_reasons_age_add)
+
+#----------------------- Model with age centred, interaction 
+model_dom_reasons_age_interact <- glmer(change_dominance ~ primary_transition_reason * start_age_centred + ( 1| participant), data = model_data_5lvls, family = binomial(link = "probit"))
+
+# Model assumption check
+check_model(model_dom_reasons_age_interact)
+
+#----------------------- Compare all models 
+model_dom_reasons_comparison <- compare_performance(model_dom_reasons_basic, model_dom_reasons_age_add, model_dom_reasons_age_interact, rank = TRUE) 
+
+# results table
+model_dom_reasons_comparison %>% 
+  kbl(col.names = c("Model Name", "Model Type","R2 Conditional", "R2 Marginal", "ICC", "RMSE", "Sigma", "Log Loss", "Score Log", "Score Spherical", "AIC wt", "AICc wt", "BIC wt", "Performance Score"), digits = 3, booktabs = T) %>%
+  kable_styling(latex_options = c("striped", "HOLD_position", "scale_down"))
+
+#Basic model wins
+
+#Summary of basic model
+summary(model_dom_reasons_basic)
+#Looks liks the Language Approach reason is the only one that statistically affects dominance, negatively (so reduces the odds of a change in dominance). This reason is highly correlated with the interpersonal change of "Strategy", so kind of redundant—it's the only thing that seems to have an effect.
+
+
+#----------------------- Test likelihood ratios to see if models are statistically significantly different from one another
+
+# No comparisons are statistically different
+
+#Basic vs additive
+model_dom_reasons_basic_vs_add <- test_likelihoodratio(model_dom_reasons_basic, model_dom_reasons_age_add) 
+
+model_dom_reasons_basic_vs_add %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1)) %>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#Basic vs interaction
+model_dom_reasons_basic_vs_interact <- test_likelihoodratio(model_dom_reasons_basic, model_dom_reasons_age_interact)
+
+model_dom_reasons_basic_vs_interact %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1))%>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#Additive vs interaction
+model_dom_reasons_add_vs_interact <- test_likelihoodratio(model_dom_reasons_age_add, model_dom_reasons_age_interact)
+
+model_dom_reasons_add_vs_interact %>% 
+  rownames_to_column("model_name") %>% 
+  select(-c(1))%>%
+  kbl(col.names = c("Model Name", "Model Type","DF", "DF Difference", "Chi2", "p"),
+      digits = 3, booktabs = T) %>%
+  kable_styling(full_width = F, font_size = 8, latex_options = c("striped", "HOLD_position"))
+
+#No clear winner
+
+#----------------------- Pairwise comparisons to see which interpersonal changes are different from one another
+
+summary(model_dom_reasons_basic)
+model_dom_reasons_basic_emms <- emmeans(model_dom_reasons_basic, "primary_transition_reason")
+pairs(model_dom_reasons_basic_emms) 
+
+#Daycare is different from language approach, covid is different from language approach
+
+```
+
+###Absolute Exposure Change
+```{r descriptives on exposure change}
+
+#Wanted to keep initial phase for a more meaningful intercept, but the model doesn't like it because there is no variation (all exposure change values are zero for this phase). Therefore, look at the pairwise comparisons for the most meaningful effects.
+
+#-------------------------------------------- Average change to exposure per transition
+model_data_5lvls %>% 
+  summarize(mean_change = mean(abs_change_t1_domlang_phase),
+            sd_change = sd(abs_change_t1_domlang_phase),
+            min_change = min(abs_change_t1_domlang_phase),
+            max_change = max(abs_change_t1_domlang_phase))
+
+#-------------------------------------------- Average change to exposure by transition reason
+model_data_5lvls %>% 
+  group_by(primary_transition_reason) %>%
+  summarize(mean_change = mean(abs_change_t1_domlang_phase),
+            sd_change = sd(abs_change_t1_domlang_phase),
+            min_change = min(abs_change_t1_domlang_phase),
+            max_change = max(abs_change_t1_domlang_phase)) %>%
+  arrange(desc(mean_change))
+
+#-------------------------------------------- Average change to exposure by interpersonal change
+model_data_5lvls %>% 
+  group_by(int_change) %>%
+  summarize(mean_change = mean(abs_change_t1_domlang_phase),
+            sd_change = sd(abs_change_t1_domlang_phase),
+            min_change = min(abs_change_t1_domlang_phase),
+            max_change = max(abs_change_t1_domlang_phase)) %>%
+  arrange(desc(mean_change))
+
+```
+
+```{r abs change by reason}
+
+#Check if age makes a difference in these models
+
+#----------------------- Model for Reasons without age
+
+model_abs_change_reasons_basic <- lmerTest::lmer(abs_change_t1_domlang_phase ~ primary_transition_reason + (1|participant), data = model_data_5lvls)
+
+summary(model_abs_change_reasons_basic)
+
+#----------------------- Model for Reasons with age additive
+
+model_abs_change_reasons_age_add <- lmerTest::lmer(abs_change_t1_domlang_phase ~ primary_transition_reason + start_age_centred + (1|participant), data = model_data_5lvls)
+
+summary(model_abs_change_reasons_age_add)
+
+#----------------------- Model for Reasons with age interactive
+
+model_abs_change_reasons_age_interact <- lmerTest::lmer(abs_change_t1_domlang_phase ~ primary_transition_reason * start_age_centred + (1|participant), data = model_data_5lvls)
+
+summary(model_abs_change_reasons_age_interact)
+
+model_abs_reasons_comparison <- compare_performance(model_abs_change_reasons_basic, model_abs_change_reasons_age_add, model_abs_change_reasons_age_interact, rank = TRUE) 
+
+# results table
+model_abs_reasons_comparison #interaction model has best performance
+
+
+
+#----------------------- Pairwise comparisons to see which reasons are different from one another 
+
+#our interaction term is continuous, so try looking at a few levels of age
+
+summary(model_abs_change_reasons_age_interact)
+
+#ages to pinpoint in comparisons: 5, 15, 25 (use the centred variables)
+start_age_points <- c(-9.2346154, 0.7653846, 10.7653846)
+
+model_abs_change_reasons_interact_emms_points <- emmeans(model_abs_change_reasons_age_interact, specs = ~ primary_transition_reason | start_age_centred, 
+                         at = list(start_age_centred = start_age_points))
+
+pairs(model_abs_change_reasons_interact_emms_points)
+
+#At lower ages, absolute changes phase-to-phase are similar. At older ages, the reasons diverge, with trip/relocation (called Other in the model) causing larger changes at older ages and language approach causing smaller changes at older ages.
+
+#our interaction term is continuous, so try comparing the slopes
+
+model_abs_change_reasons_interact_emms_slopes <- emtrends(model_abs_change_reasons_age_interact, specs = ~ primary_transition_reason, var = "start_age_centred")
+
+pairs(model_abs_change_reasons_interact_emms_slopes)
+
+#only language approach and other (trip/relocation) have significantly different slopes
+
+#quickly look at data to make sense of coefficients
+model_data_5lvls %>% 
+  ggplot(aes(x = start_age_centred, y = abs_change_t1_domlang_phase, color = primary_transition_reason)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = F, span = 2)
+
+```
+
+```{r abs change by interpersonal}
+
+#-----------------------------------------------------IN SUPPLEMENTARY MATERIALS
+
+#Wanted to keep initial phase for a more meaningful intercept, but the model doesn't like it because there is no variation (all exposure change values are zero for this phase). Therefore, look at the pairwise comparisons for the most meaningful effects.
+
+#change the factor levels of interpersonal change so SpeakerStrategyTime is the intercept
+
+#----------------------- Model for Interpersonal Changes without age
+
+model_abs_change_int_basic <- lmerTest::lmer(abs_change_t1_domlang_phase ~ int_change + (1|participant), data = model_data_5lvls)
+
+summary(model_abs_change_int_basic)
+
+#----------------------- Model for interpersonal Changes with age additive
+
+model_abs_change_int_age_add <- lmerTest::lmer(abs_change_t1_domlang_phase ~ int_change + start_age_centred + (1|participant), data = model_data_5lvls)
+
+summary(model_abs_change_int_age_add)
+
+#----------------------- Model for nterpersonal Changes with age interactive
+
+model_abs_change_int_age_interact <- lmerTest::lmer(abs_change_t1_domlang_phase ~ int_change * start_age_centred + (1|participant), data = model_data_5lvls)
+
+summary(model_abs_change_int_age_interact)
+
+model_abs_int_comparison <- compare_performance(model_abs_change_int_basic, model_abs_change_int_age_add, model_abs_change_int_age_interact, rank = TRUE) 
+
+# results table
+model_abs_int_comparison #interaction model has best performance
+
+#----------------------- Pairwise comparisons to see which interpersonal changes are different from one another 
+
+#our interaction term is continuous, so try looking at a few levels of age
+
+summary(model_abs_change_int_age_interact)
+
+model_abs_change_int_interact_emms_points <- emmeans(model_abs_change_int_age_interact, specs = ~ int_change | start_age_centred, 
+                         at = list(start_age_centred = start_age_points))
+
+pairs(model_abs_change_int_interact_emms_points)
+
+#At lower ages, absolute changes phase-to-phase are similar, except that Time changes are associated with less exposure change than SpeakerTime changes. At older ages, the pattern is a little more complex—SpeakerStrategyTime changes cause much more absolute change than the other categories, and Strategy alone transitions tend to cause less (in 2 out of 4 pairwise comparisons).
+
+#look at data to make sense of coefficients
+model_data_5lvls %>% 
+  ggplot(aes(x = start_age_centred, y = abs_change_t1_domlang_phase, color = int_change)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = F, span = 2)
+
+#our interaction term is continuous, so try comparing the slopes
+
+model_abs_change_int_interact_emms_slopes <- emtrends(model_abs_change_int_age_interact, specs = ~ int_change, var = "start_age_centred")
+
+pairs(model_abs_change_int_interact_emms_slopes)
+
+# Time and SpeakerStrategyTime have different slopes
+# SpeakerTime and SpaekerStrategyTimee have different slopes
+# Strategy and SpeakerStrategyTime have different slopes
+# SpeakerStrategyTime and Other have different slopes
+
+# the common one is SpeakerStrategyTime, which is different from all the others
+
+```
+
+##Figures
+
+```{r load required font}
+#----------------------- Only run this bit if you're making the plots on a new computer and have to load the font into R. The font file is included in the R Project files and you must install it on your computer first before running this code.
+
+add_font <- "no" #Set this to "yes" if you need to load the font into R in order for the following graphs to display properly
+
+if (add_font == "yes") {
+  
+  library(showtext)     # renders custom fonts in R graphics
+  library(sysfonts)     # font_add() for loading local fonts
+  library(systemfonts)  # match_font() for finding installed fonts
+  
+  # Find the installed font file automatically (works on Mac and PC)
+  font_path <- match_fonts("Graph_icons")$path
+  # Register it with showtext — give it any nickname you want
+  font_add(family = "Graph_icons", regular = font_path)
+  # Tell showtext to automatically render fonts in all plots
+  showtext_auto()
+  # Set DPI — use 300 for saving
+  showtext_opts(dpi = 300)
+}
+
+```
+
+```{r primary reasons barplot}
+
+icons_order <- c(1, 2, 4, 3, 5, 6)
+icons_order <- c("daycare" = 1, "caregiving arrangement" = 2, "language approach" = 4, "COVID" = 3, "trip" = 5, "relocation" = 6)
+transition_reason_labels <- c("Daycare", "Caregiving\narrangement", "Language\napproach", "COVID", "Trip", "Relocation")
+fill_colours <- c("SpeakerStrategy" = "#C19F61", "StrategyTime" = "#EEC44E", "Speaker" = "#94C162", "SpeakerStrategyTime" = "#EE6AAD",  "Strategy" = "#9F9BCA", "Time" = "#E48F4E", "SpeakerTime" = "#60BBA0")
+
+reasons_plot <- coded_transitions %>%
+  pivot_longer(starts_with("transition_reason"), names_to = "column", values_to = "transition_reason") %>% 
+  filter(transition_reason != "initial_phase" & !is.na(transition_reason) & transition_reason != "activity") %>% 
+  count(transition_reason, int_change) %>%
+  group_by(transition_reason) %>%
+  mutate(icon_num = icons_order[transition_reason]) %>%
+  ungroup() %>%
+  mutate(total = sum(n),
+         percent = n/total) %>%
+  arrange(-total, -percent) %>%
+  mutate(percentage = scales::percent(percent),
+         percent = round(percent, digits = 4),
+         transition_reason = ifelse(transition_reason != "COVID", str_to_sentence(transition_reason), transition_reason),
+         transition_reason = paste0( "<br />", str_replace(transition_reason, "\\s", "<br />"))) %>%
+  mutate(transition_reason = paste0("<span style='font-family:Graph_icons;'> ", icon_num, "</span>", "<span style='font-family:sans;'>", transition_reason, "</span>")) %>% 
+  mutate(transition_reason = fct_inorder(transition_reason)) %>%
+  ggplot(aes(x = transition_reason, y = percent, fill = int_change)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = fill_colours) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, .5)) +
+     labs(
+       title = "Reasons for transitions in children's language environment",
+       x = "\nReason for transition",
+       y = "Percent of transitions\n",
+       fill = "Interpersonal change"
+     ) +
+     theme_minimal(base_size = 14) +
+     theme(
+         panel.grid.major.x = element_blank(),
+         panel.grid.major.y = element_line(linewidth = .15),
+         plot.margin = margin(0, 0, 0, 0),
+         plot.background = element_rect(fill = "white", color = "white"),
+         panel.background = element_blank(),
+         axis.text.x.bottom = ggtext::element_markdown(lineheight = 1.2),
+         plot.title = element_text(face = "bold"),
+         plot.title.position = "plot",
+         legend.position = "right"
+     )
+
+reasons_plot 
+
+ggsave("figures/reasons_barplot.png", reasons_plot, width = 10, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r interpersonal change barplot}
+
+fill_shades <- c("#1e83a6", "#b2553c", "#b2e729", "#b668bf", "#4bd8c5", "#ec85b2")
+transition_reason_labels <- c("daycare" = "Daycare", "caregiving arrangement" = "Caregiving arrangement", "language approach" = "Language approach", "COVID" = "COVID", "trip" = "Trip", "relocation" = "Relocation")
+
+interpersonal_plot <- coded_transitions %>%
+  filter(transition_reason1 != "initial_phase") %>% 
+  count(transition_reason1, int_change) %>%
+  mutate(transition_reason = transition_reason_labels[as.character(transition_reason1)]) %>%
+  mutate(total = sum(n),
+         percent = n/total) %>%
+  group_by(int_change) %>%
+  mutate(total_category = sum(n)) %>%
+  ungroup() %>%
+  arrange(-total_category, -percent) %>%
+  mutate(percentage = scales::percent(percent),
+         percent = round(percent, digits = 4)) %>%
+  mutate(int_change = str_replace_all(int_change, "(?<=[a-z])(?=[A-Z])", "\n"),
+         int_change = fct_inorder(int_change)) %>%
+  ggplot(aes(x = int_change, y = percent, fill = transition_reason)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = fill_shades) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, .5)) +
+     labs(
+       title = "Interpersonal changes in children's language environment",
+       x = "\nInterpersonal Change",
+       y = "Percent of transitions\n",
+       fill = "Primary transition reason"
+     ) +
+     theme_minimal(base_size = 14) +
+     theme(
+         panel.grid.major.x = element_blank(),
+         panel.grid.major.y = element_line(linewidth = .15),
+         plot.margin = margin(0, 0, 0, 0),
+         plot.background = element_rect(fill = "white", color = "white"),
+         panel.background = element_blank(),
+         plot.title = element_text(face = "bold"),
+         plot.title.position = "plot",
+         legend.position = "right"
+     )
+
+interpersonal_plot 
+
+ggsave("figures/int_change_barplot.png", interpersonal_plot, width = 10, height = 6, units = "in", dpi = 300)
+
+```
+
+
+```{r timecourse icons plot}
+
+#---------------------------------------------------Create dataframe for figure
+
+timeline_fig_dataset <- coded_transitions %>%
+  filter(int_change != "initial_phase") %>%
+   group_by(participant) %>%
+   mutate(n_part_trans = n()) %>%
+   ungroup() %>%
+   arrange(n_part_trans) %>%
+    mutate(participant = factor(participant, levels = unique(participant))) %>%
+  mutate(int_change = fct_infreq(int_change),     # Reorder int_change by frequency
+    transition_reason1 = fct_infreq(transition_reason1)     
+    # Reorder transition_reason by frequency
+  ) %>%
+  mutate(participant_ordered = data.table::rleid(participant))
+
+# Create the main plot
+
+#---------------------------------------------------Create fake legend to use with our new icons
+legend_data_icons <- tibble(x = rep(0, n = 6), 
+                            y = c(3, 2.5, 2, 1.5, 1, .5),
+                            label = 1:6, transition_reason1 = 
+                              paste("   ", c("daycare", "caregiving arrangement", "COVID", "language approach", "trip", "relocation")))
+
+legend_data_colors <- tibble(x = rep(0, n = 7), 
+                             y = c(0, .5, 1, 1.5, 2, 2.5, 3),
+                             color = c("#a6761d", "#e6ab02", "#66a61e", "#e7298a",  "#7570b3", "#d95f02","#1b9e77"),
+                             label = paste("   ", c("SpeakerStrategy", "StrategyTime", "Speaker","SpeakerStrategyTime",  "Strategy", "Time", "SpeakerTime")))
+
+legend_icons <- legend_data_icons %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_text(aes(label = label), 
+            color = "#4d4d4d", family = "Graph_icons", size = 4) + 
+  geom_text(aes(label = transition_reason1), color = "#4d4d4d", hjust = 0, size = 4) + 
+  labs(title = "\nTransition Reason") + 
+  scale_x_continuous(limits = c(0, 0.25)) + 
+  scale_y_continuous(limits = c(0, 3.15)) +
+  theme_void(base_size = 11) +
+  theme(plot.margin = margin(0, 0, 0, 0))
+
+legend_colors <- legend_data_colors %>% 
+  ggplot(aes(x = x, y = y, color = color)) + 
+  geom_point(size = 2.5, alpha = 0.7) +
+  geom_text(aes(label = label), hjust = 0, color = "#4d4d4d", size = 4) + 
+  labs(title = "\nInterpersonal Change") + 
+  scale_x_continuous(limits = c(0, 0.25)) + 
+  scale_y_continuous(limits = c(0, 3.15)) +
+  scale_color_identity() +
+  theme_void(base_size = 11) +
+  theme(plot.margin = margin(0, 0, 0, 0))
+
+library(patchwork)
+
+legends <- legend_colors / legend_icons
+
+#------------------------------------------------------------Create the main plot
+
+time_plot <- timeline_fig_dataset %>%
+  #Remove two rows where the transition reason was coded as activity, as we are omitting this reason from analyses
+  filter(!is.na(transition_reason1)) %>%
+     mutate (num = as.numeric(transition_reason1),
+             ) %>%
+     ggplot(aes(
+         x = start_age, 
+         y = participant_ordered, 
+         color = int_change, 
+     )) +
+  geom_hline(yintercept = unique(timeline_fig_dataset$participant_ordered), color = "#EBEBEB") +
+     geom_text(aes(label = num), family = "Graph_icons", alpha = 0.7, size = 4.5, position = position_jitter(width = .15, height = 0)) + 
+  geom_vline(xintercept = 0, color = "darkgray", linewidth = 0.5) +
+     scale_color_brewer(palette = "Dark2") +
+     scale_x_continuous(
+         breaks = c(0, seq(3, 30, by = 3)),
+         labels = c("Birth", seq(3, 30, by = 3)),
+         limits = c(0, 30),
+         expand = c(0, 0)
+     ) +
+     scale_y_discrete(expand = expansion(add = c(1.5, 1.5))) +
+     labs(
+         x = "Age\n(Months)",
+         y = "Participants"
+     ) +
+     theme_minimal(base_size = 14) +
+     theme(
+         legend.position = "none",
+         panel.grid.minor.x = element_blank(),
+         panel.grid = element_line(linewidth = .15),
+         axis.text.y = element_blank(),
+         plot.margin = margin(0, 0, 0, 0),
+         plot.background = element_rect(fill = "white", color = "white"),
+         panel.background = element_blank()
+     )
+
+#--------------------------------------------- Create a histogram for the x-axis (ages) 
+#add a special fill for our two peaks, 1 month and 11 months
+x_hist <- timeline_fig_dataset %>%
+  mutate(peak = case_when(start_age %in% c(1, 11) ~ "#8eb7e6",
+                          TRUE ~ "lightgrey"),
+         peak_text = case_when(start_age == 1 ~ "    1-month peak",
+                               start_age == 11 ~ "    11-month peak",
+                               TRUE ~ "")) %>%
+  group_by(start_age, peak, peak_text) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  ggplot(aes(x = start_age, y = n)) +
+  geom_col(aes(fill = peak), color = "darkgrey", width = 1) +
+  geom_text(aes(label = peak_text), y = 18, hjust = 0, color = "#8eb7e6", size = 4) +
+  scale_fill_identity() +
+  scale_x_continuous(limits = c(0, 30),
+                     expand = c(0, 0)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.title.x = element_blank(),  # Hide x-axis title
+    axis.text.x = element_blank(),   # Hide x-axis text
+    axis.title.y = element_text(lineheight = .8),
+    axis.text.y = element_text(margin = margin(0, 0, 0, 5)),
+    panel.grid = element_blank(),    # Remove gridlines
+    plot.margin = margin(0, 0, 0, 15),
+    panel.background = element_blank()
+  ) + 
+  labs(y = "Count by\nage")
+
+#--------------------------------------------- Create a histogram for the y-axis (by participant)
+y_hist <- timeline_fig_dataset %>%
+  count(participant) %>%
+  ggplot(aes(y = participant, x = n)) +
+  geom_col(fill = "lightgrey", color = "darkgrey") +
+  theme_minimal(base_size = 14) +
+  scale_y_discrete(expand = expansion(add = c(1.5, 1.5))) +
+  scale_x_continuous(breaks = function(x) seq(from = 0, to = ceiling(max(x)), by = 2)) + 
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+      panel.grid = element_blank(), 
+    plot.margin = margin(0, 0, 5, 15),
+    panel.background = element_blank()
+  ) +
+  labs(x = "Count by\nparticipant")
+
+#--------------------------------------------- Combine using patchwork
+# A is main plot, B is x histogram, C is y histogram, D is top legend and E is bottom legend 
+
+layout <- "
+BBBBBBBBBBBBBBBBB############
+BBBBBBBBBBBBBBBBB#####DDDDDDD
+BBBBBBBBBBBBBBBBB#####DDDDDDD
+BBBBBBBBBBBBBBBBB#####DDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCCDDDDDDD
+AAAAAAAAAAAAAAAAACCCCC#######
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+AAAAAAAAAAAAAAAAACCCCCEEEEEEE
+"
+
+combined_plot <- time_plot + x_hist + y_hist + legend_colors + legend_icons +
+  plot_layout(design = layout) 
+
+final_time_plot <- combined_plot +
+  #plot_layout(guides = "collect") +  # Collect legends
+  plot_annotation(
+    title = "Transition Timing, Interpersonal Change, and Primary Reasons from Birth to 30 Months",
+    theme = theme(
+      plot.title = element_text(face = "bold"),
+      plot.margin = margin(15, 15, 15, 15)
+    )
+  )
+
+final_time_plot 
+
+ggsave("figures/timeline_plot.png", final_time_plot, width = 10, height = 11, units = "in", dpi = 300)
+
+```
+
+
+```{r abs change reasons pairwise slopes plot}
+
+#get the pairs
+
+pairs_model_abs_change_reasons <- as.data.frame(pairs(model_abs_change_reasons_interact_emms_slopes)) %>%
+  left_join(confint(pairs(model_abs_change_reasons_interact_emms_slopes)) %>% 
+  as.data.frame()) %>%
+  mutate(contrast = str_to_title(contrast),
+         contrast = str_replace(contrast, "Covid", "COVID"),
+         contrast = str_replace(contrast, "Other", "Trip/Relocation"))
+
+pairs_model_abs_change_reasons %>% 
+  arrange(estimate) %>% 
+  mutate(contrast = fct_inorder(contrast),
+         signif = ifelse(p.value <= .05, "signif", "not_signif"),
+         signif_label = case_when(p.value < .001 ~ "***",
+                                   p.value < .01 ~ "**",
+                                   p.value < .05 ~ "*",
+                                   TRUE ~ "")) %>% 
+  ggplot(aes(x = estimate, y = contrast)) +
+  geom_vline(xintercept = c(-.04, -.02, 0, .02, .04), linetype = "dotted", color = c("lightgrey", "lightgrey", "#ec85b2", "lightgrey", "lightgrey"), size = .5) +
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL, color = signif), linewidth = 3.5) +
+  geom_point(shape = 18, size = 4.5) +
+  geom_text(aes(label = signif_label), vjust = -0.25, color = "#ec85b2", fontface = "bold") +
+  labs(
+    x = "Difference in Slope Estimate (Contrast)",
+    y = "Pairwise Contrast\n",
+    title = "Pairwise Comparisons of Slopes",
+    subtitle = "Absolute change in language exposure by transition reason"
+    ) +
+  scale_color_manual(values = c("#6ab2b9", "#ec85b2")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot")
+
+ggsave("figures/pairwise_slopes_abschange_reasons.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r abs change interpersonal pairwise slopes plot}
+
+#----------------------------------------------IN SUPPLEMENTAL MATERIALS
+
+#to better illustrate our findings, refit the model with SpeakerStrategyTime as the intercept level
+
+model_abs_change_int_age_interact_refactored <- lmerTest::lmer(abs_change_t1_domlang_phase ~ int_change * start_age_centred + (1|participant), data = model_data_5lvls %>% mutate(int_change = fct_relevel(int_change, "SpeakerStrategyTime")))
+
+model_abs_change_int_interact_emms_slopes_refactored <- emtrends(model_abs_change_int_age_interact_refactored, specs = ~ int_change, var = "start_age_centred")
+
+#get the pairs
+
+pairs_model_abs_change_int <- as.data.frame(pairs(model_abs_change_int_interact_emms_slopes_refactored)) %>%
+  left_join(confint(pairs(model_abs_change_int_interact_emms_slopes_refactored)) %>% 
+  as.data.frame()) 
+
+pairs_model_abs_change_int %>% 
+  arrange(estimate) %>% 
+  mutate(contrast = fct_inorder(contrast),
+         signif = ifelse(p.value <= .05, "signif", "not_signif"),
+         signif_label = case_when(p.value < .001 ~ "***",
+                                   p.value < .01 ~ "**",
+                                   p.value < .05 ~ "*",
+                                   TRUE ~ "")) %>% 
+  ggplot(aes(x = estimate, y = contrast)) +
+  geom_vline(xintercept = c(-.04, -.02, 0, .02, .04), linetype = "dotted", color = c("lightgrey", "lightgrey", "#ec85b2", "lightgrey", "lightgrey"), size = .5) +
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL, color = signif), linewidth = 3.5) +
+  geom_point(shape = 18, size = 4.5) +
+  geom_text(aes(label = signif_label), vjust = -0.25, color = "#ec85b2", fontface = "bold") +
+  labs(
+    x = "Difference in Slope Estimate (Contrast)",
+    y = "Pairwise Contrast\n",
+    title = "Pairwise Comparisons of Slopes",
+    subtitle = "Absolute change in language exposure by interpersonal change"
+    ) +
+  scale_color_manual(values = c("#6ab2b9", "#ec85b2")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot")
+
+ggsave("figures/pairwise_slopes_abschange_int.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r abs change reasons 3 timepoints plot}
+
+#ages to pinpoint in comparisons: 5, 15, 25 (use the centred variables)
+start_age_points <- c(-9.2346154, 0.7653846, 10.7653846)
+
+transition_reason_labels <- c("daycare" = "Daycare", "caregiving arrangement" = "Caregiving arrangement", "language approach" = "Language approach", "COVID" = "COVID", "other" = "Trip/Relocation")
+
+#Get the means for those three time points
+model_abs_change_reasons_interact_emms_points <- emmeans(model_abs_change_reasons_age_interact, specs = ~ primary_transition_reason | start_age_centred, 
+                         at = list(start_age_centred = start_age_points))
+
+abs_change_reasons_plot_data <- model_abs_change_reasons_interact_emms_points %>%
+  as_tibble()
+
+contrast_levels_reasons <- abs_change_reasons_plot_data %>%
+  distinct(primary_transition_reason)
+
+contrast_levels_reasons <- crossing(contrast_levels_reasons, contrast_levels_reasons %>% rename(pair2 = primary_transition_reason)) %>%
+  filter(primary_transition_reason != pair2) %>%
+  mutate(contrast = paste(primary_transition_reason, "-", pair2)) %>%
+  left_join(abs_change_reasons_plot_data %>% select(start_age_centred, pair2 = primary_transition_reason, emmean2 = emmean)) 
+
+#This shows which pairs are significantly different at which time points
+abs_change_reasons_signif <- pairs(model_abs_change_reasons_interact_emms_points) %>%
+  as_tibble()
+
+abs_change_reasons_plot_data <- abs_change_reasons_plot_data %>% 
+  left_join(contrast_levels_reasons) %>%
+  mutate(primary_transition_reason = transition_reason_labels[as.character(primary_transition_reason)])
+
+signif_star_placement_reasons <- abs_change_reasons_plot_data %>%
+  left_join(abs_change_reasons_signif %>% select(contrast, start_age_centred, p.value)) %>%
+  mutate(signif = ifelse(p.value <= .05, "signif", "not_signif"),
+         signif_label = case_when(p.value < .001 ~ "***",
+                                   p.value < .01 ~ "**",
+                                   p.value < .05 ~ "*",
+                                   TRUE ~ ""),
+         signif_placement = (emmean + emmean2)/2) %>%
+  filter(signif_label != "") %>% 
+  group_by(start_age_centred) %>% 
+  mutate(adjustx = data.table::rleid(contrast)*0.5) %>% 
+  ungroup() %>% 
+  mutate(start_age_og = start_age_centred,
+         start_age_centred = start_age_centred + adjustx)
+
+color_shades <- c("Caregiving arrangement" = "#1e83a6", "COVID" = "#b2553c", "Daycare" = "#b2e729", "Language approach" = "#b668bf", "Trip/Relocation" = "#4bd8c5")
+
+abs_change_reasons_plot_data %>%
+  ggplot(aes(x = start_age_centred, y = emmean, color = primary_transition_reason)) +
+  geom_point(size = 2) +
+  geom_line(linewidth = 1.5) +
+  geom_segment(aes(xend = start_age_centred, yend = emmean2), data = signif_star_placement_reasons, color = "black") +
+  geom_segment(aes(xend = start_age_centred - 0.25, yend = emmean), data = signif_star_placement_reasons, color = "black") +
+  geom_segment(aes(xend = start_age_centred - 0.25, y = emmean2, yend = emmean2), data = signif_star_placement_reasons, color = "black") +
+  geom_text(aes(label = signif_label, y = ((emmean+emmean2)/2)), data = signif_star_placement_reasons, angle = -90, color = "black", vjust = 0.4) +
+  scale_color_manual(values = color_shades) +
+  scale_x_continuous(breaks = c(-9.2346154, 0.7653846, 10.7653846), labels = c("5 months", "15 months", "25 months"), limits = c(-10, 15)) +
+  scale_y_continuous(limits = c(0, 0.4)) +
+  labs(title = "Pairwise comparisons of EMMs at three time points",
+       y = "Estimated Marginal Mean\n",
+       x = "\nAge in months",
+       color = "Primary Transition Reason") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot") +
+   guides(color = guide_legend(nrow = 1,
+                              title.position = "top", 
+                              title.hjust = 0.5)) 
+
+ggsave("figures/emm_abs_reasons_timepoints_plot.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r abs change int 3 timepoints plot}
+
+#-------------------------------------------------------IN SUPPLEMENTAL MATERIALS
+
+#ages to pinpoint in comparisons: 5, 15, 25 (use the centred variables)
+start_age_points <- c(-9.2346154, 0.7653846, 10.7653846)
+
+#Get the means for those three time points
+model_abs_change_int_interact_emms_points <- emmeans(model_abs_change_int_age_interact, specs = ~ int_change | start_age_centred, 
+                         at = list(start_age_centred = start_age_points))
+
+abs_change_int_plot_data <- model_abs_change_int_interact_emms_points %>%
+  as_tibble()
+
+contrast_levels_int <- abs_change_int_plot_data %>%
+  distinct(int_change)
+
+contrast_levels_int <- crossing(contrast_levels_int, contrast_levels_int %>% rename(pair2 = int_change)) %>%
+  filter(int_change != pair2) %>%
+  mutate(contrast = paste(int_change, "-", pair2)) %>%
+  left_join(abs_change_int_plot_data %>% select(start_age_centred, pair2 = int_change, emmean2 = emmean)) 
+
+#This shows which pairs are significantly different at which time points
+abs_change_int_signif <- pairs(model_abs_change_int_interact_emms_points) %>%
+  as_tibble()
+
+abs_change_int_plot_data <- abs_change_int_plot_data %>% 
+  left_join(contrast_levels_int) 
+
+signif_star_placement_int <- abs_change_int_plot_data %>%
+  left_join(abs_change_int_signif %>% select(contrast, start_age_centred, p.value)) %>%
+  mutate(signif = ifelse(p.value <= .05, "signif", "not_signif"),
+         signif_label = case_when(p.value < .001 ~ "***",
+                                   p.value < .01 ~ "**",
+                                   p.value < .05 ~ "*",
+                                   TRUE ~ ""),
+         signif_placement = (emmean + emmean2)/2) %>%
+  filter(signif_label != "") %>% 
+  group_by(start_age_centred) %>% 
+  mutate(adjustx = data.table::rleid(contrast)*0.5) %>% 
+  ungroup() %>% 
+  mutate(start_age_og = start_age_centred,
+         start_age_centred = start_age_centred + adjustx)
+
+color_shades <- c("SpeakerStrategyTime" = "#EE6AAD",  "Strategy" = "#9F9BCA", "Time" = "#E48F4E", "SpeakerTime" = "#60BBA0", "Other" = c("#94C162"))
+
+abs_change_int_plot_data %>%
+  ggplot(aes(x = start_age_centred, y = emmean, color = int_change)) +
+  geom_point(size = 2) +
+  geom_line(linewidth = 1.5) +
+  geom_segment(aes(xend = start_age_centred, yend = emmean2), data = signif_star_placement_int, color = "black") +
+  geom_segment(aes(xend = start_age_centred - 0.25, yend = emmean), data = signif_star_placement_int, color = "black") +
+  geom_segment(aes(xend = start_age_centred - 0.25, y = emmean2, yend = emmean2), data = signif_star_placement_int, color = "black") +
+  geom_text(aes(label = signif_label, y = ((emmean+emmean2)/2)), data = signif_star_placement_int, angle = -90, color = "black", vjust = 0.4) +
+  scale_color_manual(values = color_shades) +
+  scale_x_continuous(breaks = c(-9.2346154, 0.7653846, 10.7653846), labels = c("5 months", "15 months", "25 months"), limits = c(-10, 15)) +
+  scale_y_continuous(limits = c(0, 0.6)) +
+  labs(title = "Pairwise comparisons of EMMs at three time points",
+       y = "Estimated Marginal Mean\n",
+       x = "\nAge in months",
+       color = "Interpersonal Change") +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot") +
+   guides(color = guide_legend(nrow = 1,
+                              title.position = "top", 
+                              title.hjust = 0.5)) 
+
+ggsave("figures/emm_abs_int_timepoints_plot.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r dom change int pairwise plot}
+
+#get the pairs
+emm_model_dom_int <- emmeans(model_dom_5lvls_basic, ~ int_change)
+pairs_model_dom_int <- pairs(emm_model_dom_int, adjust = "tukey")
+
+pairs_model_dom_int_pvals <- as.data.frame(pairs_model_dom_int) %>%
+  select(contrast, p.value)
+pairs_model_dom_int <- as.data.frame(summary(pairs_model_dom_int, infer = TRUE)) %>%
+  #as.data.frame(confint(pairs_model_dom_int)) %>%
+  left_join(pairs_model_dom_int_pvals)
+
+
+
+pairs_model_dom_int %>% 
+  arrange(estimate) %>% 
+  mutate(contrast = fct_inorder(contrast),
+         signif = ifelse(p.value <= .05, "signif", "not_signif"),
+         signif_label = case_when(p.value < .001 ~ "***",
+                                   p.value < .01 ~ "**",
+                                   p.value < .05 ~ "*",
+                                   TRUE ~ "")) %>% 
+  ggplot(aes(x = estimate, y = contrast)) +
+  geom_vline(xintercept = c(-2, -1, 0, 1, 2), linetype = "dotted", color = c("lightgrey", "lightgrey", "#ec85b2", "lightgrey", "lightgrey"), size = .5) +
+  geom_linerange(aes(xmin = asymp.LCL, xmax = asymp.UCL, color = signif), linewidth = 3.5) +
+  geom_point(shape = 18, size = 4.5) +
+  geom_text(aes(label = signif_label), vjust = -0.25, color = "#ec85b2", fontface = "bold") +
+  labs(
+    x = "Difference in Estimated Marginal Means",
+    y = "Pairwise Contrast\n",
+    title = "Pairwise Comparisons of EMMs",
+    subtitle = "Dominance switch by interpersonal change"
+    ) +
+  scale_color_manual(values = c("#6ab2b9", "#ec85b2")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot")
+
+ggsave("figures/emm_pairwise_domchange_int.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
+
+```{r dom change reasons pairwise plot}
+
+#---------------------------------------------------IN SUPPLEMENTAL MATERIALS
+
+#To better illustrate our points, change the factor levels so that language approach is the intercept
+model_dom_reasons_basic_refactored <- glmer(change_dominance ~ primary_transition_reason + ( 1| participant), data = (model_data_5lvls %>% mutate(primary_transition_reason = fct_relevel(primary_transition_reason, "language approach"))), family = binomial(link = "probit"))
+
+#get the pairs
+emm_model_dom_reasons <- emmeans(model_dom_reasons_basic_refactored, ~ primary_transition_reason)
+pairs_model_dom_reasons <- pairs(emm_model_dom_reasons, adjust = "tukey")
+
+pairs_model_dom_reasons_pvals <- as.data.frame(pairs_model_dom_reasons) %>%
+  select(contrast, p.value)
+
+pairs_model_dom_reasons <- as.data.frame(summary(pairs_model_dom_reasons, infer = TRUE)) %>%
+  left_join(pairs_model_dom_reasons_pvals)
+
+pairs_model_dom_reasons %>% 
+  arrange(estimate) %>% 
+  mutate(contrast = fct_inorder(contrast),
+         signif = ifelse(p.value <= .05, "signif", "not_signif"),
+         signif_label = case_when(p.value < .001 ~ "***",
+                                   p.value < .01 ~ "**",
+                                   p.value < .05 ~ "*",
+                                   TRUE ~ "")) %>% 
+  ggplot(aes(x = estimate, y = contrast)) +
+  geom_vline(xintercept = c(-2, -1, 0, 1, 2), linetype = "dotted", color = c("lightgrey", "lightgrey", "#ec85b2", "lightgrey", "lightgrey"), size = .5) +
+  geom_linerange(aes(xmin = asymp.LCL, xmax = asymp.UCL, color = signif), linewidth = 3.5) +
+  geom_point(shape = 18, size = 4.5) +
+  geom_text(aes(label = signif_label), vjust = -0.25, color = "#ec85b2", fontface = "bold") +
+  labs(
+    x = "Difference in Estimated Marginal Means",
+    y = "Pairwise Contrast\n",
+    title = "Pairwise Comparisons of EMMs",
+    subtitle = "Dominance switch by primary transition reason"
+    ) +
+  scale_color_manual(values = c("#6ab2b9", "#ec85b2")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot")
+
+ggsave("figures/emm_pairwise_domchange_reasons.png", width = 9, height = 6, units = "in", dpi = 300)
+
+```
